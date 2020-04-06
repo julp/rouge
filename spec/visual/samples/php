@@ -91,7 +91,22 @@ use const some\namespace\ConstC;
 // Grouped uses
 use some\namespace\{ClassA, ClassB, ClassC as C};
 use function some\namespace\{fn_a, fn_b, fn_c};
-use const some\namespace\{ConstA, ConstB, ConstC};
+use const some\namespace\{
+    ConstA,
+    #ConstB,
+    ConstC
+};
+
+use some\name\{function some_fn, const Foo\BAR, SomeClass};
+
+use Class1, /*Class2, */Class3;
+
+class ClassB
+{
+    use TraitA, TraitB, TraitC {
+        TraitB::foo insteadof TraitA;
+    }
+}
 
 namespace some\namespace;
 

@@ -90,6 +90,14 @@ module Rouge
         rule(//) { push :template; push :php }
       end
 
+      state :ignorables do
+        rule %r/\s+/, Text
+        rule %r/#.*?$/, Comment::Single
+        rule %r(//.*?$), Comment::Single
+        rule %r(/\*\*(?!/).*?\*/)m, Comment::Doc
+        rule %r(/\*.*?\*/)m, Comment::Multiline
+      end
+
       state :template do
         rule %r/<\?(php|=)?/, Comment::Preproc, :php
         rule(/.*?(?=<\?)|.*/m) { delegate parent }
@@ -99,11 +107,7 @@ module Rouge
         rule %r/\?>/, Comment::Preproc, :pop!
         # heredocs
         rule %r/<<<('?)(#{id})\1\n.*?\n\s*\2;?/im, Str::Heredoc
-        rule %r/\s+/, Text
-        rule %r/#.*?$/, Comment::Single
-        rule %r(//.*?$), Comment::Single
-        rule %r(/\*\*(?!/).*?\*/)m, Comment::Doc
-        rule %r(/\*.*?\*/)m, Comment::Multiline
+        mixin :ignorables
         
         rule %r/(->|::)(\s*)(#{id})/ do
           groups Operator, Text, Name::Attribute
@@ -114,8 +118,8 @@ module Rouge
         rule %r/(class|interface|trait)(\s+)(#{nsid})/ do
           groups Keyword::Declaration, Text, Name::Class
         end
-        rule %r/(use)(\s+)(function|const|)(\s*)(#{nsid})/ do
-          groups Keyword::Namespace, Text, Keyword::Namespace, Text, Name::Namespace
+        rule %r/(use)(\s+)(function|const|)(\s*)(#{nsid})/i do
+          groups Keyword::Namespace, Text, Keyword, Text, Name::Namespace
           push :use
         end
         rule %r/(namespace)(\s+)(#{nsid})/ do
@@ -164,22 +168,26 @@ module Rouge
       end
       
       state :use do
-        rule %r/(\s+)(as)(\s+)(#{id})/ do
+        rule %r/(\s+)(as)(\s+)(#{id})/i do
           groups Text, Keyword, Text, Name
           :pop!
         end
+        mixin :ignorables
+        rule %r/#{nsid}/, Name::Namespace
+        rule %r/,/, Punctuation
         rule %r/\\\{/, Operator, :uselist
-        rule %r/;/, Punctuation, :pop!
+        rule %r/[;{]/, Punctuation, :pop!
       end
       
       state :uselist do
-        rule %r/\s+/, Text
+        mixin :ignorables
+        rule %r/(function|const)\b/i, Keyword
         rule %r/,/, Operator
         rule %r/\}/, Operator, :pop!
-        rule %r/(as)(\s+)(#{id})/ do
+        rule %r/(as)(\s+)(#{id})/i do
           groups Keyword, Text, Name
         end
-        rule %r/#{id}/, Name::Namespace
+        rule %r/#{nsid}/, Name::Namespace
       end
 
       state :funcname do
