@@ -63,13 +63,14 @@ module Rouge
       end
 
       def self.keywords
-        # (echo parent ; echo self ; sed -nE 's/<ST_IN_SCRIPTING>"((__)?[[:alpha:]_]+(__)?)".*/\1/p' zend_language_scanner.l | tr '[A-Z]' '[a-z]') | sort -u | grep -Fwv -e isset -e unset -e empty -e const -e use -e function -e namespace
+        # (echo parent ; echo self ; sed -nE 's/<ST_IN_SCRIPTING>"((__)?[[:alpha:]_]+(__)?)".*/\1/p' zend_language_scanner.l | tr '[A-Z]' '[a-z]') | sort -u | grep -Fwv -e isset -e unset -e empty -e const -e use -e namespace
         # - isset, unset and empty are actually keywords (directly handled by PHP's lexer but let's pretend these are functions, you use them like so)
         # - self and parent are kind of keywords, they are not handled by PHP's lexer
         # - use, const, namespace and function are handled by specific rules to highlight what's next to the keyword
         # - class is also listed here, in addition to the rule below, to handle anonymous classes
         @keywords ||= Set.new %w(
           old_function cfunction
+          function
           __class__ __dir__ __file__ __function__ __halt_compiler
           __line__ __method__ __namespace__ __trait__ abstract and
           array as break callable case catch class clone continue
@@ -103,7 +104,11 @@ module Rouge
       end
 
       state :php do
-        rule %r/\?>/, Comment::Preproc, :pop!
+        rule %r/\?>/ do
+          @name_kind = nil
+          token Comment::Preproc
+          pop!
+        end
         # heredocs
         rule %r/<<<(["']?)(#{id})\1\n.*?\n\s*\2;?/im, Str::Heredoc
         rule %r/\s+/, Text
@@ -119,30 +124,23 @@ module Rouge
         rule %r/(void|\??(int|float|bool|string|iterable|self|callable))\b/i, Keyword::Type
         rule %r/[~!%^&*+=\|:.<>\/@-]+/, Operator
         rule %r/\?/, Operator
-        rule %r/[\[\]{}();,]/, Punctuation
-        rule %r/(class|interface|trait)(\s+)(#{nsid})/i do
-          groups Keyword::Declaration, Text, Name::Class
+        rule %r/[;{]/ do
+          @name_kind = nil
+          token Punctuation
         end
-        rule %r/(use)(\s+)(function|const|)(\s*)(#{nsid})/i do
-          groups Keyword::Namespace, Text, Keyword::Namespace, Text, Name::Namespace
-          push :use
+        rule %r/[\[\]}(),]/, Punctuation
+        rule %r/(namespace)\b/i do
+          @name_kind = Name::Namespace
+          token Keyword
         end
-        rule %r/(namespace)(\s+)(#{nsid})/i do
-          groups Keyword::Namespace, Text, Name::Namespace
+        rule %r/(class|interface|use)\b/i do
+          @name_kind = Name::Class
+          token Keyword
         end
-        # anonymous functions
-        rule %r/(function)(\s*)(?=\()/i do
-          groups Keyword, Text
-        end
-
-        # named functions
-        rule %r/(function)(\s+)(&?)(\s*)/i do
-          groups Keyword, Text, Operator, Text
-          push :funcname
-        end
-
-        rule %r/(const)(\s+)(#{id})/i do
-          groups Keyword, Text, Name::Constant
+        rule %r/const\b/i do
+          # to ignore const in a use statement
+          @name_kind = Name::Constant if @name_kind.nil?
+          token Keyword
         end
 
         rule %r/stdClass\b/i, Name::Class
@@ -155,13 +153,15 @@ module Rouge
         end
 
         # may be intercepted for builtin highlighting
-        rule %r/\\?#{nsid}/i do |m|
+        rule %r/\\?#{nsid}/ do |m|
           name = m[0].downcase
 
           if self.class.keywords.include? name
             token Keyword
           elsif self.builtins.include? name
             token Name::Builtin
+          elsif @name_kind
+            token @name_kind
           else
             token Name::Other
           end
@@ -175,29 +175,6 @@ module Rouge
         rule %r/'([^'\\]*(?:\\.[^'\\]*)*)'/, Str::Single
         rule %r/`([^`\\]*(?:\\.[^`\\]*)*)`/, Str::Backtick
         rule %r/"/, Str::Double, :string
-      end
-
-      state :use do
-        rule %r/(\s+)(as)(\s+)(#{id})/i do
-          groups Text, Keyword, Text, Name
-          :pop!
-        end
-        rule %r/\\\{/, Operator, :uselist
-        rule %r/;/, Punctuation, :pop!
-      end
-
-      state :uselist do
-        rule %r/\s+/, Text
-        rule %r/,/, Operator
-        rule %r/\}/, Operator, :pop!
-        rule %r/(as)(\s+)(#{id})/i do
-          groups Keyword, Text, Name
-        end
-        rule %r/#{id}/, Name::Namespace
-      end
-
-      state :funcname do
-        rule %r/#{id}/, Name::Function, :pop!
       end
 
       state :string do
