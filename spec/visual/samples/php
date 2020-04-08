@@ -114,6 +114,12 @@ use const some\namespace\{
 
 use some\name\{function some_fn, const Foo\BAR, SomeClass};
 
+use /*not*/some\name\{
+    function some_fn,
+    #const Foo\BAR,
+    SomeClass,
+};
+
 use Class1, /*Class2, */Class3;
 
 class ClassB

@@ -66,7 +66,7 @@ module Rouge
         # (echo parent ; echo self ; sed -nE 's/<ST_IN_SCRIPTING>"((__)?[[:alpha:]_]+(__)?)".*/\1/p' zend_language_scanner.l | tr '[A-Z]' '[a-z]') | sort -u | grep -Fwv -e isset -e unset -e empty -e const -e use -e namespace
         # - isset, unset and empty are actually keywords (directly handled by PHP's lexer but let's pretend these are functions, you use them like so)
         # - self and parent are kind of keywords, they are not handled by PHP's lexer
-        # - use, const, namespace and function are handled by specific rules to highlight what's next to the keyword
+        # - use, const, trait and namespace are handled by specific rules to highlight what's next to the keyword
         # - class is also listed here, in addition to the rule below, to handle anonymous classes
         @keywords ||= Set.new %w(
           old_function cfunction
@@ -80,7 +80,7 @@ module Rouge
           implements include include_once instanceof insteadof
           interface list new or parent print private protected
           public require require_once return self static switch
-          throw trait try var while xor yield
+          throw try use var while xor yield
         )
       end
 
@@ -129,17 +129,17 @@ module Rouge
           token Punctuation
         end
         rule %r/[\[\]}(),]/, Punctuation
-        rule %r/(namespace)\b/i do
+        rule %r/(namespace|use)\b/i do
           @name_kind = Name::Namespace
-          token Keyword
+          token Keyword#::Namespace
         end
-        rule %r/(class|interface|use)\b/i do
+        rule %r/(class|interface|trait)\b/i do
           @name_kind = Name::Class
-          token Keyword
+          token Keyword#::Declaration
         end
         rule %r/const\b/i do
           # to ignore const in a use statement
-          @name_kind = Name::Constant if @name_kind.nil?
+          @name_kind ||= Name::Constant
           token Keyword
         end
 
