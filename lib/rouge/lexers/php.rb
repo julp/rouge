@@ -18,9 +18,53 @@ module Rouge
       option :funcnamehighlighting, 'Whether to highlight builtin functions (default: true)'
       option :disabledmodules, 'Disable certain modules from being highlighted as builtins (default: empty)'
 
+      class Stack
+        def initialize
+          reset
+        end
+
+        def set(stmt, default, stack = [])
+          @statement = stmt
+          @default = default
+          @stack = stack
+#           STDERR.puts "\nset: #{self.inspect}"
+        end
+
+        def none?
+          @statement.nil?
+        end
+
+        def statement
+          @statement
+        end
+
+        def reset
+          @stack = []
+          @statement = nil
+          @default = Token::Tokens::Name::Other
+#           STDERR.puts "\nreset: #{self.inspect}"
+        end
+
+        def push(kind)
+          @stack.push(kind)
+#           STDERR.puts "\npush: #{self.inspect}"
+        end
+
+        def pop
+          @stack.pop || @default
+#           STDERR.puts "\npop: #{self.inspect}"
+        end
+
+        def empty
+          @stack.clear
+#           STDERR.puts "\nempty: #{self.inspect}"
+        end
+      end
+
       def initialize(*)
         super
 
+        @memoizer = Stack.new
         # if truthy, the lexer starts highlighting with php code
         # (no <?php required)
         @start_inline = bool_option(:start_inline) { :guess }
@@ -45,14 +89,14 @@ module Rouge
       end
 
       def reset_token
-        @next_token = nil
+        @memoizer.reset
       end
 
       # source: http://php.net/manual/en/language.variables.basics.php
       # the given regex is invalid utf8, so... we're using the unicode
       # "Letter" property instead.
       id = /[\p{L}_][\p{L}\p{N}_]*/
-      id_with_ns_and_paren = /((?:#{id}\\?)+)(\s*)([(]?)/
+      nsid = /#{id}(?:\\#{id})*/
 
       start do
         case @start_inline
@@ -112,7 +156,7 @@ module Rouge
 
       state :php do
         rule %r/\?>/ do
-          @next_token = nil
+          @memoizer.reset
           token Comment::Preproc
           pop!
         end
@@ -133,14 +177,40 @@ module Rouge
 
         rule %r/(void|\??(int|float|bool|string|iterable|self|callable))\b/i, Keyword::Type
 
-        rule %r/[~!%^&*+=\|:.<>\/@-]+/, Operator
-        rule %r/\?/, Operator
+        rule %r/=/ do
+          token Operator
+          # on argument list, on '=' you pass default values, names are constants
+          @memoizer.pop if :function == @memoizer.statement
+        end
 
+        # handle/exclude the "\{" first (grouped-use statement, eg: `use some\namespace\{ ... };`)
+        #rule %r/\\{/, Punctuation
+        rule %r/(\\)({)/ do
+          groups Name::Namespace, Punctuation
+        end
         rule %r/[;{]/ do
           token Punctuation
-          @next_token = nil
+          @memoizer.reset
         end
-        rule %r/[\[\]}(),]/, Punctuation
+        rule %r/,/ do
+          token Punctuation
+          @memoizer.empty
+          # the next "direct" name might be a class name (typehinting for argument)
+          @memoizer.push(Name::Class) if :function == @memoizer.statement
+        end
+        rule %r/\(/ do
+          token Punctuation
+          # drop Name::Function in case of an anonymous function
+          @memoizer.pop if :function == @memoizer.statement
+          # the next "direct" name might be a class name (typehinting for argument)
+          @memoizer.push(Name::Class) if :function == @memoizer.statement
+        end
+        rule %r/\)/ do
+          token Punctuation
+          # the next "direct" name might be a class name (typehinting for return value)
+          @memoizer.push(Name::Class) if :function == @memoizer.statement
+        end
+        rule %r/[\[\]}]/, Punctuation
 
         rule %r/stdClass\b/i, Name::Class
         rule %r/(true|false|null)\b/i, Keyword::Constant
@@ -151,45 +221,52 @@ module Rouge
           groups Keyword, Text, Keyword
         end
 
-        rule id_with_ns_and_paren do |m|
-          name = m[1].downcase
-          first = Name
+        rule %r/[\\?]?#{nsid}/ do |m|
+          name = m[0].downcase
 
-          if self.class.namespaces.include? name
-            first = Keyword::Namespace
-            @next_token = Name::Namespace
-          elsif self.class.declarations.include? name
-            first = Keyword::Declaration
-            @next_token = Name::Class
-          elsif "const" == name
-            first = Keyword
-            @next_token = Name::Constant if @next_token.nil?
-          elsif "function" == name
-            first = Keyword
-            @next_token = Name::Function
-          elsif self.class.keywords.include? name
-            first = Keyword
-          elsif self.builtins.include? name
-            first = Name::Builtin
-          elsif @next_token == Name::Function
-            first = Name::Function
-            @next_token = nil
-          elsif @next_token
-            first = @next_token
-          else
-            if m[1] =~ /^[[:upper:]][[[:upper:]]\d_]+$/
-              first = Name::Constant
-            elsif m[1] =~ /^[[:upper:]][[:alnum:]]+?$/
-              first = Name::Class
-            elsif m[3] == "("
-              first = Name::Function
+          #STDERR.puts @memoizer.inspect
+          kind = if 'use' == name
+            @memoizer.set(:use, Name::Namespace)
+            Keyword::Namespace
+#           elsif 'as' == name
+#             @memoizer.push(Name::Alias) if :use == @memoizer.statement
+#             Keyword
+          elsif 'class' == name
+            @memoizer.set(:class, Name::Class)
+            Keyword::Declaration
+          elsif 'const' == name
+            # distinguish 'const' found in a `use` statement
+            if @memoizer.none?
+              @memoizer.set(:const, Name::Constant)
             else
-              first = Name
+              @memoizer.push(Name::Constant)
             end
+            Keyword
+          elsif 'function' == name
+            # distinguish 'function' found in a `use` statement
+            if @memoizer.none?
+              @memoizer.set(:function, Name::Constant, [Name::Function])
+            else
+              @memoizer.push(Name::Function)
+            end
+            Keyword
+          elsif self.class.namespaces.include? name
+            Keyword::Namespace
+          elsif self.class.declarations.include? name
+            Keyword::Declaration
+          elsif self.class.keywords.include? name
+            Keyword
+          elsif @memoizer.none? and self.builtins.include? name
+            Name::Builtin
+          else
+            @memoizer.pop
           end
 
-          groups first, Text, Punctuation
+          token kind
         end
+
+        rule %r/[~!%^&*+\|:.<>\/@-]+/, Operator
+        rule %r/\?/, Operator
 
         rule %r/(\d[_\d]*)?\.(\d[_\d]*)?(e[+-]?\d[_\d]*)?/i, Num::Float
         rule %r/0[0-7][0-7_]*/, Num::Oct
